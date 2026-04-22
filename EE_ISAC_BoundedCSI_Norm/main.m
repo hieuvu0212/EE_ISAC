@@ -46,7 +46,7 @@ v_lbl = {'Robust','Perfect CSI','Perfect HW','Perfect Both'};
 %  Shared plot styles
 styles    = {'r-s','k--^','b-o','m--d'};
 styles_ec = {'r-s','k-^','b-o','m-d'};
-styles_es = {'r--s','k--^','b--o','m--d'};
+styles_es = {'r-s','k-^','b-o','m-d'};
 mfc       = {'r',  'k',   'b',  'm'  };
 
 ec_lbl = cellfun(@(x) ['EE_c ' x], v_lbl, 'UniformOutput', false);
