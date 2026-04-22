@@ -69,44 +69,6 @@ fprintf('=== Phase 1: Global normalisation constants ===\n');
 
 fprintf('\nEE_c,max = %.4f  |  EE_c,min = %.4f\n', EEcmax, EEcmin);
 fprintf('EE_s,max = %.4f  |  EE_s,min = %.4f\n\n', EEsmax, EEsmin);
-
-%% =========================================================================
-%  FIGURE 1 – CONVERGENCE OF DINKELBACH-SCA
-%  Now plots: total WEE, omega*EEc_norm, and (1-omega)*EEs_norm per iteration
-% --------------------------------------------------------------------------
-fprintf('=== Figure 1: Convergence ===\n');
-
-[Wc_f1, Ws_f1, EEc_f1, EEs_f1, obj_hist,EEc_hist, EEs_hist] = ...
-    solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, p.P_max, p.sigma2, ...
-               p.Gamma_min, p.gamma_min, p.i_b, p.i_k, p.P_static, p.r_k_vec, ...
-               p.omega, p.T_max, p.epsilon, EEcmax, EEsmax, p.N_rand, EEcmin, EEsmin);
-
-
-% ---- plot ----------------------------------------------------------------
-n_iter = numel(obj_hist);
-iter_ax = 1:n_iter;
-EEc_hist_norm = p.omega     * (EEc_hist - EEcmin) ./ (EEcmax - EEcmin);
-EEs_hist_norm = (1-p.omega) * (EEs_hist - EEsmin) ./ (EEsmax - EEsmin);
-
-figure(1);
-plot(iter_ax, obj_hist,       'b-o',  'LineWidth',2, 'MarkerSize',6); hold on;
-plot(iter_ax, EEc_hist_norm,  'r--s', 'LineWidth',1.8,'MarkerSize',5);hold on; 
-plot(iter_ax, EEs_hist_norm,  'g--^', 'LineWidth',1.8,'MarkerSize',5);hold on;
-hold off; grid on;
-xlabel('Number of Iterations','FontSize',13);
-ylabel('Normalised Value','FontSize',13);
-title(sprintf('Fig. 1: Convergence of Dinkelbach-SCA  (\\omega=%.2f)', p.omega),'FontSize',13);
-%str = sprintf('EE_c = %.4f bit/J/Hz\nEE_s = %.4f', EEc_f1, EEs_f1);
-%text(0.97, 0.15, str, 'Units','normalized','HorizontalAlignment','right', ...
-%    'VerticalAlignment','bottom','FontSize',11,'BackgroundColor','white', ...
-%    'EdgeColor','black','Margin',5);
-legend(sprintf('WEE (\\omega=%.2f)', p.omega), ...
-       sprintf('\\omega \\cdot EE_c^{norm}'), ...
-       sprintf('(1-\\omega) \\cdot EE_s^{norm}'), ...
-       'Location','best','FontSize',8);
-set(gca,'FontSize',12); drawnow;
-fprintf('    Figure 1 rendered.\n\n');
-
 %% =========================================================================
 %  FIGURE 2 – IMPACT OF WEIGHTING COEFFICIENT omega
 % --------------------------------------------------------------------------
@@ -155,7 +117,7 @@ else
     omega_cross = NaN;
     fprintf('  No crossover found in [0,1].\n');
 end
-
+p.omega = omega_cross; 
 % ------------------------------------------------------------------
 %  Plot
 % ------------------------------------------------------------------
@@ -192,6 +154,44 @@ legend('show', 'Location', 'best', 'FontSize', 11);
 set(gca, 'FontSize', 12);
 drawnow;
 fprintf('    Figure 2 rendered.\n\n');
+
+%% =========================================================================
+%  FIGURE 1 – CONVERGENCE OF DINKELBACH-SCA
+%  Now plots: total WEE, omega*EEc_norm, and (1-omega)*EEs_norm per iteration
+% --------------------------------------------------------------------------
+fprintf('=== Figure 1: Convergence ===\n');
+
+[Wc_f1, Ws_f1, EEc_f1, EEs_f1, obj_hist,EEc_hist, EEs_hist] = ...
+    solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, p.P_max, p.sigma2, ...
+               p.Gamma_min, p.gamma_min, p.i_b, p.i_k, p.P_static, p.r_k_vec, ...
+               p.omega, p.T_max, p.epsilon, EEcmax, EEsmax, p.N_rand, EEcmin, EEsmin);
+
+
+% ---- plot ----------------------------------------------------------------
+n_iter = numel(obj_hist);
+iter_ax = 1:n_iter;
+EEc_hist_norm = p.omega     * (EEc_hist - EEcmin) ./ (EEcmax - EEcmin);
+EEs_hist_norm = (1-p.omega) * (EEs_hist - EEsmin) ./ (EEsmax - EEsmin);
+
+figure(1);
+plot(iter_ax, obj_hist,       'b-o',  'LineWidth',2, 'MarkerSize',6); hold on;
+plot(iter_ax, EEc_hist_norm,  'r--s', 'LineWidth',1.8,'MarkerSize',5);hold on; 
+plot(iter_ax, EEs_hist_norm,  'g--^', 'LineWidth',1.8,'MarkerSize',5);hold on;
+hold off; grid on;
+xlabel('Number of Iterations','FontSize',13);
+ylabel('Normalised Value','FontSize',13);
+title(sprintf('Fig. 1: Convergence of Dinkelbach-SCA  (\\omega=%.2f)', p.omega),'FontSize',13);
+%str = sprintf('EE_c = %.4f bit/J/Hz\nEE_s = %.4f', EEc_f1, EEs_f1);
+%text(0.97, 0.15, str, 'Units','normalized','HorizontalAlignment','right', ...
+%    'VerticalAlignment','bottom','FontSize',11,'BackgroundColor','white', ...
+%    'EdgeColor','black','Margin',5);
+legend(sprintf('WEE (\\omega=%.2f)', p.omega), ...
+       sprintf('\\omega \\cdot EE_c^{norm}'), ...
+       sprintf('(1-\\omega) \\cdot EE_s^{norm}'), ...
+       'Location','best','FontSize',8);
+set(gca,'FontSize',12); drawnow;
+fprintf('    Figure 1 rendered.\n\n');
+
 
 %% =========================================================================
 %  FIGURE 3 – IMPACT OF SENSING CONSTRAINT Gamma_min  (4 benchmarks)
