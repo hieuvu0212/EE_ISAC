@@ -10,7 +10,7 @@ clc; clear; close all;
 
 %% =========================================================================
 %  LOCK RANDOM SEED
-%rng(42);
+rng(42);
 
 %% =========================================================================
 %  LOAD SYSTEM PARAMETERS
@@ -27,9 +27,6 @@ fprintf('Channel realisation saved to saved_channels.mat\n\n');
 
 %% =========================================================================
 %  COMPUTE UNCERTAINTY RADII  r_k  FOR THE BASELINE CHANNEL
-%  xi_k = delta * ||h_hat_k||
-%  r_k  = sqrt( xi_k^2/2 * chi2inv(1-delta_outage, 2N) )
-% --------------------------------------------------------------------------
 for k = 1:p.K
     p.xi_k_vec(k) = p.delta * norm(H_hat(:, k));
     p.r_k_vec(k)  = sqrt( (p.xi_k_vec(k)^2 / 2) * ...
@@ -38,23 +35,20 @@ end
 fprintf('Baseline uncertainty radii r_k computed.\n\n');
 
 %  Shorthand benchmark parameter sets
-r_k_rob  = p.r_k_vec;      % bounded uncertainty radius
-r_k_perf = zeros(1, p.K);  % perfect channel knowledge: r_k = 0
+r_k_rob  = p.r_k_vec;
+r_k_perf = zeros(1, p.K);
 
-%  4 variant definitions reused across Fig 3,4,6,7:
-%  v_rk{v}, v_ib{v}, v_ik{v}
 v_rk  = {r_k_rob,  r_k_perf, r_k_rob,  r_k_perf};
 v_ib  = {p.i_b,    p.i_b,    IMP_EPS,  IMP_EPS };
 v_ik  = {p.i_k,    p.i_k,    IMP_EPS,  IMP_EPS };
 v_lbl = {'Robust','Perfect CSI','Perfect HW','Perfect Both'};
 
-%  Shared plot styles (1=Robust, 2=PerfCSI, 3=PerfHW, 4=PerfBoth)
-styles = {'r-s','k--^','b-o','m--d'};
+%  Shared plot styles
+styles    = {'r-s','k--^','b-o','m--d'};
 styles_ec = {'r-s','k-^','b-o','m-d'};
 styles_es = {'r--s','k--^','b--o','m--d'};
-mfc    = {'r',  'k',   'b',  'm'  };
+mfc       = {'r',  'k',   'b',  'm'  };
 
-%  Legend label helpers
 ec_lbl = cellfun(@(x) ['EE_c ' x], v_lbl, 'UniformOutput', false);
 es_lbl = cellfun(@(x) ['EE_s ' x], v_lbl, 'UniformOutput', false);
 
@@ -66,7 +60,6 @@ fprintf('H_bank generated: %d x %d x %d.\n\n', max(N_vec_f7), p.K, p.N_MC);
 
 %% =========================================================================
 %  PHASE 1 – GLOBAL NORMALISATION CONSTANTS  (baseline parameters)
-% --------------------------------------------------------------------------
 fprintf('=== Phase 1: Global normalisation constants ===\n');
 
 [EEcmax, EEcmin, EEsmax, EEsmin] = get_norm_constants( ...
@@ -79,25 +72,38 @@ fprintf('EE_s,max = %.4f  |  EE_s,min = %.4f\n\n', EEsmax, EEsmin);
 
 %% =========================================================================
 %  FIGURE 1 – CONVERGENCE OF DINKELBACH-SCA
+%  Now plots: total WEE, omega*EEc_norm, and (1-omega)*EEs_norm per iteration
 % --------------------------------------------------------------------------
 fprintf('=== Figure 1: Convergence ===\n');
 
-[Wc_f1, Ws_f1, EEc_f1, EEs_f1, obj_hist] = ...
+[Wc_f1, Ws_f1, EEc_f1, EEs_f1, obj_hist,EEc_hist, EEs_hist] = ...
     solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, p.P_max, p.sigma2, ...
                p.Gamma_min, p.gamma_min, p.i_b, p.i_k, p.P_static, p.r_k_vec, ...
                p.omega, p.T_max, p.epsilon, EEcmax, EEsmax, p.N_rand, EEcmin, EEsmin);
 
+
+% ---- plot ----------------------------------------------------------------
+n_iter = numel(obj_hist);
+iter_ax = 1:n_iter;
+EEc_hist_norm = p.omega     * (EEc_hist - EEcmin) ./ (EEcmax - EEcmin);
+EEs_hist_norm = (1-p.omega) * (EEs_hist - EEsmin) ./ (EEsmax - EEsmin);
+
 figure(1);
-plot(1:numel(obj_hist), obj_hist, 'b-o','LineWidth',2,'MarkerSize',6);
-grid on;
+plot(iter_ax, obj_hist,       'b-o',  'LineWidth',2, 'MarkerSize',6); hold on;
+plot(iter_ax, EEc_hist_norm,  'r--s', 'LineWidth',1.8,'MarkerSize',5);hold on; 
+plot(iter_ax, EEs_hist_norm,  'g--^', 'LineWidth',1.8,'MarkerSize',5);hold on;
+hold off; grid on;
 xlabel('Number of Iterations','FontSize',13);
-ylabel('Normalised Weighted EE','FontSize',13);
+ylabel('Normalised Value','FontSize',13);
 title(sprintf('Fig. 1: Convergence of Dinkelbach-SCA  (\\omega=%.2f)', p.omega),'FontSize',13);
-str = sprintf('EE_c = %.4f bit/J/Hz\nEE_s = %.4f', EEc_f1, EEs_f1);
-text(0.97, 0.15, str, 'Units','normalized','HorizontalAlignment','right', ...
-    'VerticalAlignment','bottom','FontSize',11,'BackgroundColor','white', ...
-    'EdgeColor','black','Margin',5);
-legend(sprintf('\\omega = %.2f', p.omega), 'Location','southeast');
+%str = sprintf('EE_c = %.4f bit/J/Hz\nEE_s = %.4f', EEc_f1, EEs_f1);
+%text(0.97, 0.15, str, 'Units','normalized','HorizontalAlignment','right', ...
+%    'VerticalAlignment','bottom','FontSize',11,'BackgroundColor','white', ...
+%    'EdgeColor','black','Margin',5);
+legend(sprintf('WEE (\\omega=%.2f)', p.omega), ...
+       sprintf('\\omega \\cdot EE_c^{norm}'), ...
+       sprintf('(1-\\omega) \\cdot EE_s^{norm}'), ...
+       'Location','best','FontSize',8);
 set(gca,'FontSize',12); drawnow;
 fprintf('    Figure 1 rendered.\n\n');
 
@@ -106,38 +112,90 @@ fprintf('    Figure 1 rendered.\n\n');
 % --------------------------------------------------------------------------
 fprintf('=== Figure 2: Impact of omega ===\n');
 
-omega_vec = 0:0.05:1;
-n_om      = numel(omega_vec);
-EEc_om    = zeros(n_om,1);
-EEs_om    = zeros(n_om,1);
+omega_vec   = 0:0.05:1;
+n_om        = numel(omega_vec);
+
+% Weighted normalised contributions  (what the objective actually uses)
+wEEc_om = zeros(n_om, 1);   %  omega       * (EEc - EEcmin)/(EEcmax - EEcmin)
+wEEs_om = zeros(n_om, 1);   %  (1-omega)   * (EEs - EEsmin)/(EEsmax - EEsmin)
 
 for idx = 1:n_om
     om = omega_vec(idx);
     fprintf('  omega=%.2f\n', om);
-    [~,~,ec,es,~] = solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, p.P_max, p.sigma2, ...
-        p.Gamma_min, p.gamma_min, p.i_b, p.i_k, p.P_static, p.r_k_vec, om, ...
+    [~,~,ec,es,~] = solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, ...
+        p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
+        p.i_b, p.i_k, p.P_static, p.r_k_vec, om, ...
         p.T_max, p.epsilon, EEcmax, EEsmax, p.N_rand, EEcmin, EEsmin);
-    EEc_om(idx) = ec;
-    EEs_om(idx) = es;
+
+    % Normalise using the global bounds computed in Phase 1
+    ec_norm = (ec - EEcmin) / (EEcmax - EEcmin);
+    es_norm = (es - EEsmin) / (EEsmax - EEsmin);
+
+    % Apply the omega weighting  ← this is the fix
+    wEEc_om(idx) = om       * ec_norm;
+    wEEs_om(idx) = (1-om)   * es_norm;
 end
 
-figure(2);
+% ------------------------------------------------------------------
+%  Find crossover:  omega * EEc_norm  =  (1-omega) * EEs_norm
+%  i.e. the zero-crossing of  (wEEc_om - wEEs_om)
+% ------------------------------------------------------------------
+diff_vec  = wEEc_om - wEEs_om;
+cross_idx = find(diff(sign(diff_vec)) ~= 0, 1);   % last sign change
+
+if ~isempty(cross_idx)
+    % Linear interpolation between cross_idx and cross_idx+1
+    om1 = omega_vec(cross_idx);   d1 = diff_vec(cross_idx);
+    om2 = omega_vec(cross_idx+1); d2 = diff_vec(cross_idx+1);
+    omega_cross = om1 - d1*(om2-om1)/(d2-d1);
+    wEEc_cross  = interp1(omega_vec, wEEc_om, omega_cross, 'linear');
+    fprintf('  Crossover omega* = %.4f  (weighted EEc_norm = EEs_norm = %.4f)\n', ...
+            omega_cross, wEEc_cross);
+else
+    omega_cross = NaN;
+    fprintf('  No crossover found in [0,1].\n');
+end
+
+% ------------------------------------------------------------------
+%  Plot
+% ------------------------------------------------------------------
+figure(2); clf;
+set(gcf, 'Position', [100 100 750 480]);
+ 
 yyaxis left;
-plot(omega_vec, EEc_om, 'b-o','LineWidth',2,'MarkerSize',5,'MarkerFaceColor','b');
-ylabel('Communication EE (EE_c)','FontSize',13,'Color','b');
-set(gca,'YColor','b');
+plot(omega_vec, wEEc_om, 'b-o', 'LineWidth', 2, 'MarkerSize', 5, ...
+    'MarkerFaceColor', 'b', 'DisplayName', '\omega \cdot EE_c^{norm}');
+ylabel('\omega \cdot EE_c^{norm}', 'FontSize', 13, 'Color', 'b');
+set(gca, 'YColor', 'b');
+ 
 yyaxis right;
-plot(omega_vec, EEs_om, 'r-s','LineWidth',2,'MarkerSize',5,'MarkerFaceColor','r');
-ylabel('Sensing EE (EE_s)','FontSize',13,'Color','r');
-set(gca,'YColor','r');
+plot(omega_vec, wEEs_om, 'r-s', 'LineWidth', 2, 'MarkerSize', 5, ...
+    'MarkerFaceColor', 'r', 'DisplayName', '(1-\omega) \cdot EE_s^{norm}');
+ylabel('(1-\omega) \cdot EE_s^{norm}', 'FontSize', 13, 'Color', 'r');
+set(gca, 'YColor', 'r');
+ 
+% Mark crossover point
+if ~isempty(cross_idx)
+    yyaxis left;
+    hold on;
+    plot(omega_cross, wEEc_cross, 'kp', 'MarkerSize', 12, ...
+        'MarkerFaceColor', 'k', ...
+        'DisplayName', sprintf('Crossover \\omega^* = %.3f', omega_cross));
+    hold off;
+end
+ 
 grid on;
-xlabel('Weighting Coefficient  \omega','FontSize',13);
-title('Fig. 2: Trade-off between EE_c and EE_s','FontSize',13);
-set(gca,'FontSize',12); drawnow;
+xlabel('Weighting Coefficient  \omega', 'FontSize', 13);
+set(gca, 'XTick', omega_vec);
+title('Fig. 2: Weighted EE_c^{norm} and EE_s^{norm} vs. \omega', 'FontSize', 13);
+legend('show', 'Location', 'best', 'FontSize', 11);
+set(gca, 'FontSize', 12);
+drawnow;
 fprintf('    Figure 2 rendered.\n\n');
 
 %% =========================================================================
 %  FIGURE 3 – IMPACT OF SENSING CONSTRAINT Gamma_min  (4 benchmarks)
+%  Layout: 3 subplots – (a) WEE, (b) EEc, (c) EEs
 % --------------------------------------------------------------------------
 fprintf('=== Figure 3: Gamma_min sweep (4 benchmarks) ===\n');
 
@@ -145,7 +203,7 @@ Gamma_dBm_vec = 16:2:24;
 Gamma_W_vec   = db2pow(Gamma_dBm_vec) * 1e-3;
 n_gam         = numel(Gamma_dBm_vec);
 
-% --- Pass 1: collect bounds from ALL 4 variants x ALL sweep points ---
+% --- Pass 1: shared bounds ---
 ec_max_all = zeros(n_gam,4);  ec_min_all = zeros(n_gam,4);
 es_max_all = zeros(n_gam,4);  es_min_all = zeros(n_gam,4);
 
@@ -159,7 +217,6 @@ for v = 1:4
     end
 end
 
-% Shared bounds: union over all 4 variants and all sweep points
 [EEc_max_f3, best_idx_f3] = max(ec_max_all(:,1));
 EEc_min_f3 = ec_min_all(best_idx_f3, 1);
 EEs_max_f3 = es_max_all(best_idx_f3, 1);
@@ -185,10 +242,10 @@ for v = 1:4
     end
 end
 
-% --- Plot ---
-figure(3); set(gcf,'Position',[100 100 1200 500]);
+% --- Plot: 3 subplots ---
+figure(3); set(gcf,'Position',[100 100 1600 450]);
 
-subplot(1,2,1);
+subplot(1,3,1);
 for v = 1:4
     plot(Gamma_dBm_vec, WEE_f3(:,v), styles{v}, 'LineWidth',2, ...
         'MarkerSize',7,'MarkerFaceColor',mfc{v}); hold on;
@@ -200,26 +257,28 @@ title(sprintf('(a) WEE  (\\omega=%.2f)', p.omega),'FontSize',13);
 legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
 
-subplot(1,2,2);
-yyaxis left;
+subplot(1,3,2);
 for v = 1:4
-    plot(Gamma_dBm_vec, EEc_f3(:,v), styles_ec{v}, 'LineWidth',1.8, ...
+    plot(Gamma_dBm_vec, EEc_f3(:,v), styles_ec{v}, 'LineWidth',2, ...
         'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
 end
-hold off;
-ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13,'Color','b');
-set(gca,'YColor','b');
-yyaxis right;
-for v = 1:4
-    plot(Gamma_dBm_vec, EEs_f3(:,v), styles_es{v}, 'LineWidth',1.8, ...
-        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
-end
-hold off;
-ylabel('Sensing EE  (EE_s)','FontSize',13,'Color','r');
-set(gca,'YColor','r'); grid on;
+hold off; grid on;
 xlabel('Sensing Threshold  \Gamma_{min}  (dBm)','FontSize',13);
-title('(b) Raw EE_c and EE_s','FontSize',13);
-legend([ec_lbl, es_lbl],'Location','best','FontSize',9);
+ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13);
+title('(b) EE_c','FontSize',13);
+legend(v_lbl,'Location','best','FontSize',10);
+set(gca,'FontSize',12);
+
+subplot(1,3,3);
+for v = 1:4
+    plot(Gamma_dBm_vec, EEs_f3(:,v), styles_es{v}, 'LineWidth',2, ...
+        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
+end
+hold off; grid on;
+xlabel('Sensing Threshold  \Gamma_{min}  (dBm)','FontSize',13);
+ylabel('Sensing EE  (EE_s)','FontSize',13);
+title('(c) EE_s','FontSize',13);
+legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
 
 sgtitle(sprintf('Fig. 3: Impact of \\Gamma_{min}  (\\omega=%.2f)', p.omega), ...
@@ -229,6 +288,7 @@ fprintf('    Figure 3 rendered.\n\n');
 
 %% =========================================================================
 %  FIGURE 4 – IMPACT OF gamma_min (SINR)  (4 benchmarks)
+%  Layout: 3 subplots – (a) WEE, (b) EEc, (c) EEs
 % --------------------------------------------------------------------------
 fprintf('=== Figure 4: gamma_min sweep (4 benchmarks) ===\n');
 
@@ -275,10 +335,10 @@ for v = 1:4
     end
 end
 
-% --- Plot ---
-figure(4); set(gcf,'Position',[100 100 1200 500]);
+% --- Plot: 3 subplots ---
+figure(4); set(gcf,'Position',[100 100 1600 450]);
 
-subplot(1,2,1);
+subplot(1,3,1);
 for v = 1:4
     plot(gamma_dB_vec, WEE_f4(:,v), styles{v}, 'LineWidth',2, ...
         'MarkerSize',7,'MarkerFaceColor',mfc{v}); hold on;
@@ -290,26 +350,28 @@ title(sprintf('(a) WEE  (\\omega=%.2f)', p.omega),'FontSize',13);
 legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
 
-subplot(1,2,2);
-yyaxis left;
+subplot(1,3,2);
 for v = 1:4
-    plot(gamma_dB_vec, EEc_f4(:,v), styles_ec{v}, 'LineWidth',1.8, ...
+    plot(gamma_dB_vec, EEc_f4(:,v), styles_ec{v}, 'LineWidth',2, ...
         'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
 end
-hold off;
-ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13,'Color','b');
-set(gca,'YColor','b');
-yyaxis right;
-for v = 1:4
-    plot(gamma_dB_vec, EEs_f4(:,v), styles_es{v}, 'LineWidth',1.8, ...
-        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
-end
-hold off;
-ylabel('Sensing EE  (EE_s)','FontSize',13,'Color','r');
-set(gca,'YColor','r'); grid on;
+hold off; grid on;
 xlabel('Minimum SINR  \gamma_{min}  (dB)','FontSize',13);
-title('(b) Raw EE_c and EE_s','FontSize',13);
-legend([ec_lbl, es_lbl],'Location','best','FontSize',9);
+ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13);
+title('(b) EE_c','FontSize',13);
+legend(v_lbl,'Location','best','FontSize',10);
+set(gca,'FontSize',12);
+
+subplot(1,3,3);
+for v = 1:4
+    plot(gamma_dB_vec, EEs_f4(:,v), styles_es{v}, 'LineWidth',2, ...
+        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
+end
+hold off; grid on;
+xlabel('Minimum SINR  \gamma_{min}  (dB)','FontSize',13);
+ylabel('Sensing EE  (EE_s)','FontSize',13);
+title('(c) EE_s','FontSize',13);
+legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
 
 sgtitle(sprintf('Fig. 4: Impact of \\gamma_{min}  (\\omega=%.2f)', p.omega), ...
@@ -319,8 +381,7 @@ fprintf('    Figure 4 rendered.\n\n');
 
 %% =========================================================================
 %  FIGURE 5 – IMPACT OF HARDWARE IMPAIRMENT COEFFICIENTS (i_b, i_k)
-%  Single benchmark (Robust).  Hardware IS the swept variable here so no
-%  separate Perfect HW curve – that would just be a different x-axis point.
+%  (unchanged – single benchmark, bar chart layout)
 % --------------------------------------------------------------------------
 fprintf('=== Figure 5: Hardware impairments sweep ===\n');
 
@@ -330,7 +391,7 @@ n_imp      = numel(i_b_vec);
 imp_labels = arrayfun(@(a,b) sprintf('(%.2f,%.2f)',a,b), ...
                       i_b_vec, i_k_vec, 'UniformOutput', false);
 
-% --- Pass 1: shared bounds across all (i_b, i_k) points ---
+% --- Pass 1: shared bounds ---
 ec_max_imp = zeros(n_imp,1);  ec_min_imp = zeros(n_imp,1);
 es_max_imp = zeros(n_imp,1);  es_min_imp = zeros(n_imp,1);
 
@@ -398,6 +459,7 @@ fprintf('    Figure 5 rendered.\n\n');
 
 %% =========================================================================
 %  FIGURE 6 – WEIGHTED EE vs P_max  (4 benchmarks)
+%  Layout: 3 subplots – (a) WEE, (b) EEc, (c) EEs
 % --------------------------------------------------------------------------
 fprintf('=== Figure 6: P_max sweep (4 benchmarks) ===\n');
 
@@ -444,10 +506,10 @@ for v = 1:4
     end
 end
 
-% --- Plot ---
-figure(6); set(gcf,'Position',[100 100 1200 500]);
+% --- Plot: 3 subplots ---
+figure(6); set(gcf,'Position',[100 100 1600 450]);
 
-subplot(1,2,1);
+subplot(1,3,1);
 for v = 1:4
     plot(Pmax_dBm_vec, WEE_f6(:,v), styles{v}, 'LineWidth',2, ...
         'MarkerSize',7,'MarkerFaceColor',mfc{v}); hold on;
@@ -459,26 +521,28 @@ title(sprintf('(a) WEE  (\\omega=%.2f)', p.omega),'FontSize',13);
 legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
 
-subplot(1,2,2);
-yyaxis left;
+subplot(1,3,2);
 for v = 1:4
-    plot(Pmax_dBm_vec, EEc_f6(:,v), styles_ec{v}, 'LineWidth',1.8, ...
+    plot(Pmax_dBm_vec, EEc_f6(:,v), styles_ec{v}, 'LineWidth',2, ...
         'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
 end
-hold off;
-ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13,'Color','b');
-set(gca,'YColor','b');
-yyaxis right;
-for v = 1:4
-    plot(Pmax_dBm_vec, EEs_f6(:,v), styles_es{v}, 'LineWidth',1.8, ...
-        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
-end
-hold off;
-ylabel('Sensing EE  (EE_s)','FontSize',13,'Color','r');
-set(gca,'YColor','r'); grid on;
+hold off; grid on;
 xlabel('Maximum Transmit Power  P_{max}  (dBm)','FontSize',13);
-title('(b) Raw EE_c and EE_s','FontSize',13);
-legend([ec_lbl, es_lbl],'Location','best','FontSize',9);
+ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13);
+title('(b) EE_c','FontSize',13);
+legend(v_lbl,'Location','best','FontSize',10);
+set(gca,'FontSize',12);
+
+subplot(1,3,3);
+for v = 1:4
+    plot(Pmax_dBm_vec, EEs_f6(:,v), styles_es{v}, 'LineWidth',2, ...
+        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
+end
+hold off; grid on;
+xlabel('Maximum Transmit Power  P_{max}  (dBm)','FontSize',13);
+ylabel('Sensing EE  (EE_s)','FontSize',13);
+title('(c) EE_s','FontSize',13);
+legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
 
 sgtitle(sprintf('Fig. 6: Weighted EE vs. P_{max}  (\\omega=%.2f)', p.omega), ...
@@ -488,8 +552,7 @@ fprintf('    Figure 6 rendered.\n\n');
 
 %% =========================================================================
 %  FIGURE 7 – WEIGHTED EE vs NUMBER OF ANTENNAS N  (4 benchmarks)
-%  Note: r_k is N-dependent and is recomputed locally for each N.
-%        Variants 1 & 3 use bounded r_k; variants 2 & 4 use r_k = 0.
+%  Only subplot (a): WEE vs N  –  EEc/EEs subplot removed
 % --------------------------------------------------------------------------
 fprintf('=== Figure 7: N sweep (4 benchmarks) ===\n');
 
@@ -504,7 +567,6 @@ for v = 1:4
         N_cur  = N_vec_f7(idx);
         H_norm = H_bank(1:N_cur, :, 1);
 
-        % r_k scales with N; variants 1 & 3 = bounded, 2 & 4 = perfect CSI
         if ismember(v, [1 3])
             r_k_cur = zeros(1, p.K);
             for k = 1:p.K
@@ -532,8 +594,8 @@ fprintf('  Fig7 shared EEs bounds: [%.4f, %.4f]\n', EEs_min_f7, EEs_max_f7);
 
 % --- Pass 2: solve ---
 WEE_f7 = zeros(n_N,4);
-EEc_f7 = zeros(n_N,4);
-EEs_f7 = zeros(n_N,4);
+EEc_f7 = zeros(n_N,4);   %#ok<NASGU>  kept for possible future use
+EEs_f7 = zeros(n_N,4);   %#ok<NASGU>
 
 for v = 1:4
     for idx = 1:n_N
@@ -555,17 +617,17 @@ for v = 1:4
             p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
             v_ib{v}, v_ik{v}, p.P_static, r_k_cur, p.omega, ...
             p.T_max, p.epsilon, EEc_max_f7, EEs_max_f7, p.N_rand, EEc_min_f7, EEs_min_f7);
-        EEc_f7(idx,v) = ec;  EEs_f7(idx,v) = es;
+        EEc_f7(idx,v) = ec;
+        EEs_f7(idx,v) = es;
         WEE_f7(idx,v) = p.omega     * ((ec - EEc_min_f7)/(EEc_max_f7 - EEc_min_f7)) + ...
                         (1-p.omega) * ((es - EEs_min_f7)/(EEs_max_f7 - EEs_min_f7));
         fprintf('    WEE=%.4f\n', WEE_f7(idx,v));
     end
 end
 
-% --- Plot ---
-figure(7); set(gcf,'Position',[100 100 1200 500]);
+% --- Plot: single subplot (WEE only) ---
+figure(7); set(gcf,'Position',[100 100 650 480]);
 
-subplot(1,2,1);
 for v = 1:4
     plot(N_vec_f7, WEE_f7(:,v), styles{v}, 'LineWidth',2, ...
         'MarkerSize',7,'MarkerFaceColor',mfc{v}); hold on;
@@ -573,50 +635,22 @@ end
 hold off; grid on;
 xlabel('Number of Antennas  N','FontSize',13);
 ylabel('Normalised Weighted EE','FontSize',13);
-title(sprintf('(a) WEE  (\\omega=%.2f)', p.omega),'FontSize',13);
+title(sprintf('Fig. 7: Weighted EE vs. N  (\\omega=%.2f)', p.omega), ...
+      'FontSize',14,'FontWeight','bold');
 legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
-
-subplot(1,2,2);
-yyaxis left;
-for v = 1:4
-    plot(N_vec_f7, EEc_f7(:,v), styles_ec{v}, 'LineWidth',1.8, ...
-        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
-end
-hold off;
-ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13,'Color','b');
-set(gca,'YColor','b');
-yyaxis right;
-for v = 1:4
-    plot(N_vec_f7, EEs_f7(:,v), styles_es{v}, 'LineWidth',1.8, ...
-        'MarkerSize',6,'MarkerFaceColor',mfc{v}); hold on;
-end
-hold off;
-ylabel('Sensing EE  (EE_s)','FontSize',13,'Color','r');
-set(gca,'YColor','r'); grid on;
-xlabel('Number of Antennas  N','FontSize',13);
-title('(b) Raw EE_c and EE_s','FontSize',13);
-legend([ec_lbl, es_lbl],'Location','best','FontSize',9);
-set(gca,'FontSize',12);
-
-sgtitle(sprintf('Fig. 7: Weighted EE vs. N  (\\omega=%.2f)', p.omega), ...
-        'FontSize',14,'FontWeight','bold');
 drawnow;
 fprintf('    Figure 7 rendered.\n\n');
 
 %% =========================================================================
-%  FIGURE 8 – IMPACT OF CHANNEL UNCERTAINTY LEVEL delta
-%
-%  delta = 0  --> perfect channel knowledge  (r_k = 0, no robustness cost)
-%  delta > 0  --> bounded robust design; r_k grows with delta via chi2inv
-%  Hardware impairments are fixed at p.i_b / p.i_k throughout.
+%  FIGURE 8 – IMPACT OF CHANNEL UNCERTAINTY LEVEL delta  (unchanged)
 % --------------------------------------------------------------------------
 fprintf('=== Figure 8: Channel uncertainty level delta ===\n');
 
 delta_vec = [0, 0.005, 0.01, 0.02, 0.03];
 n_delta   = numel(delta_vec);
 
-% --- Pass 1: shared bounds across all delta values ---
+% --- Pass 1: shared bounds ---
 ec_max_all = zeros(n_delta,1);  ec_min_all = zeros(n_delta,1);
 es_max_all = zeros(n_delta,1);  es_min_all = zeros(n_delta,1);
 
@@ -639,7 +673,7 @@ EEs_max_f8 = max(es_max_all);  EEs_min_f8 = min(es_min_all);
 fprintf('  Fig8 shared EEc bounds: [%.4f, %.4f]\n', EEc_min_f8, EEc_max_f8);
 fprintf('  Fig8 shared EEs bounds: [%.4f, %.4f]\n', EEs_min_f8, EEs_max_f8);
 
-% --- Pass 2: solve for all delta values ---
+% --- Pass 2: solve ---
 WEE_delta = zeros(n_delta,1);
 EEc_delta = zeros(n_delta,1);
 EEs_delta = zeros(n_delta,1);
@@ -662,7 +696,6 @@ for idx = 1:n_delta
     fprintf('    EEc=%.4f  EEs=%.4f  WEE=%.4f\n', ec, es, WEE_delta(idx));
 end
 
-% delta=0 is the perfect channel knowledge reference (r_k=0)
 perf_idx = 1;
 rob_idx  = 2:n_delta;
 
