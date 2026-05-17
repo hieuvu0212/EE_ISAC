@@ -9,9 +9,9 @@
 %
 %  Robust SINR constraint (Bernstein inequality form):
 %    xi_k^2 * Tr(Q_k) - sqrt(2*ln(1/delta_outage)) * u_k + ln(delta_outage) * v_k
-%        + c_k >= 0,                                            
-%    || [xi_k^2 * vec(Q_k) ; sqrt(2)*xi_k * Q_k * h_hat_k] || <= u_k,  
-%    v_k * I_N + xi_k^2 * Q_k >= 0,   v_k >= 0,                
+%        + c_k >= 0,
+%    || [xi_k^2 * vec(Q_k) ; sqrt(2)*xi_k * Q_k * h_hat_k] || <= u_k,
+%    v_k * I_N + xi_k^2 * Q_k >= 0,   v_k >= 0,
 %
 %  where  Q_k = (1/gamma_min)*W_{c,k} - sum_{j~=k} W_{c,j}
 %              - sum_l W_{s,l} - i_k * W_total
@@ -20,15 +20,20 @@
 %
 %  Returns rank-1 physical matrices and EE values from those matrices.
 % -------------------------------------------------------------------------
-function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
+function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
     solve_ISAC(H_hat, theta_targets, N, K, M, P_max, sigma2, ...
                Gamma_min, gamma_min, i_b, i_k, P_static, ...
                delta_outage, xi_k_vec, ...
-               omega, T_max, epsilon, EEcmax, EEsmax, N_rand,EEcmin, EEsmin)
-    if nargin < 21; EEcmin = 0; end
-    if nargin < 22; EEsmin = 0; end 
+               omega, T_max, epsilon, EEcmax, EEsmax, N_rand, EEcmin, EEsmin)
+
+    if nargin < 22; EEcmin = 0; end
+    if nargin < 23; EEsmin = 0; end
+
     sl    = @(th) exp(1j*pi*((0:N-1)'-(N-1)/2)*sind(th));
     log_2 = log(2);
+
+    nc = EEcmax - EEcmin;
+    ns = EEsmax - EEsmin;
 
     % --- Initialise beamformers -------------------------------------------
     p0 = P_max / (K + M);
@@ -43,11 +48,11 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
         Ws{l} = w*w';
     end
 
-    nc = max(EEcmax - EEcmin, 1e-9);
-    ns = max(EEsmax - EEsmin, 1e-9);
-    q  = 0;
-    obj_hist = zeros(T_max,1);
-    Wc_SDR = Wc;  Ws_SDR = Ws;
+    q        = 0;
+    obj_hist = zeros(T_max, 1);
+    EEc_hist = zeros(T_max, 1);   % <-- ADDED
+    EEs_hist = zeros(T_max, 1);   % <-- ADDED
+    Wc_SDR   = Wc;  Ws_SDR = Ws;
 
     % --- Dinkelbach-SCA main loop ----------------------------------------
     for t = 1:T_max
@@ -74,7 +79,7 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
         % CVX SDP
         % -----------------------------------------------------------------
         cvx_begin quiet
-            cvx_solver mosek 
+            cvx_solver mosek
             variable Wc_v(N,N,K) complex semidefinite
             variable Ws_v(N,N,M) complex semidefinite
             variable u_v(K) nonnegative          % Bernstein slack u_k >= 0
@@ -119,7 +124,9 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
 
             % --- Dinkelbach objective ---
             P_tot_expr = P_static + (1+i_b)*tot_power;
-            obj_expr = (omega/nc)*(Rk_lb - EEcmin*P_tot_expr) + ((1-omega)/ns)*(sense_gain - EEsmin*P_tot_expr) - q * P_tot_expr;
+            obj_expr = (omega/nc)*(Rk_lb - EEcmin*P_tot_expr) + ...
+                       ((1-omega)/ns)*(sense_gain - EEsmin*P_tot_expr) - ...
+                       q * P_tot_expr;
 
             maximize( obj_expr )
 
@@ -138,16 +145,14 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
                 % -------------------------------------------------------
                 for k = 1:K
                     hk   = H_hat(:,k);
-                    xi_k = xi_k_vec(k);   % per-user uncertainty std
+                    xi_k = xi_k_vec(k);
 
-                    % Build Q_k (effective SINR numerator matrix)
                     Qk = (1/gamma_min)*Wc_v(:,:,k);
                     for j = 1:K; if j~=k; Qk = Qk - Wc_v(:,:,j); end; end
                     for l = 1:M;          Qk = Qk - Ws_v(:,:,l);       end
                     Qk = Qk - i_k*W_sum ...
                              - (1+i_k)*i_b*diag(diag(W_sum));
-
-                    % c_k  (deterministic part of SINR at nominal channel)
+                    if xi_k > 0
                     c_k = real(hk'*Qk*hk) - (1+i_k)*sigma2;
 
                     % (C1) Bernstein scalar constraint
@@ -156,15 +161,17 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
                         + log(delta_outage) * v_v(k) ...
                         + c_k >= 0;
 
-                    % (C2) Second-order cone constraint
-                    % || [xi_k^2 * vec(Qk) ; sqrt(2)*xi_k * Qk * hk] || <= u_k
-                    % vec(Qk) for an N x N matrix -> N^2 x 1 real+imag stack
-                    vec_Qk = Qk(:);   % complex N^2-vector
+                    % (C2) SOC constraint
+                    vec_Qk  = Qk(:);
                     lhs_vec = [xi_k^2 * vec_Qk ; sqrt(2)*xi_k * Qk * hk];
                     norm(lhs_vec) <= u_v(k);
 
-                    % (C3) Matrix inequality: v_k*I + xi_k^2 * Q_k >= 0
+                    % (C3) Matrix PSD: v_k*I + xi_k^2 * Q_k >= 0
                     v_v(k)*eye(N) + xi_k^2 * Qk == hermitian_semidefinite(N);
+                    else
+                        % Perfect CSI: nominal SINR constraint only
+                        real(hk'*Qk*hk) - (1+i_k)*sigma2 >= 0;
+                    end
                 end
 
         cvx_end
@@ -172,7 +179,10 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
         if strcmp(cvx_status,'Infeasible') || strcmp(cvx_status,'Failed')
             warning('CVX: %s at t=%d. Using last feasible point.', ...
                     cvx_status, t);
-            obj_hist = obj_hist(1:max(t-1,1));
+            last = max(t-1, 1);
+            obj_hist = obj_hist(1:last);
+            EEc_hist = EEc_hist(1:last);   % <-- ADDED
+            EEs_hist = EEs_hist(1:last);   % <-- ADDED
             break;
         end
 
@@ -185,33 +195,41 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
         end
         Wc = Wc_SDR;  Ws = Ws_SDR;
 
-        % Update Dinkelbach parameter using SDR solution
+        % ------------------------------------------------------------------
+        % Evaluate SDR solution metrics for logging and Dinkelbach update
+        % ------------------------------------------------------------------
         [EEc_sdr, EEs_sdr, R_sum_sdr, p_sense_sdr] = ...
             compute_EE(Wc_SDR, Ws_SDR, H_hat, theta_targets, ...
                        sigma2, i_b, i_k, P_static, N, K, M);
-        % Total power consumed at this iterate
+
         W_tmp = zeros(N,N);
         for j=1:K; W_tmp=W_tmp+Wc_SDR{j}; end
         for l=1:M; W_tmp=W_tmp+Ws_SDR{l}; end
         P_cons_sdr = P_static + (1+i_b)*real(trace(W_tmp));
 
-        % Raw numerator matching exactly what CVX maximises:
-        %   omega/nc * R_sum  +  (1-omega)/ns * p_sense
-        num_raw = (omega/nc)*(R_sum_sdr - EEcmin*P_cons_sdr) + ((1-omega)/ns)*(p_sense_sdr - EEsmin*P_cons_sdr);
+        num_raw = (omega/nc)*(R_sum_sdr - EEcmin*P_cons_sdr) + ...
+                  ((1-omega)/ns)*(p_sense_sdr - EEsmin*P_cons_sdr);
 
-        % Dinkelbach parameter update must match the CVX objective form
         q_new = num_raw / max(P_cons_sdr, 1e-30);
 
-        % Normalised weighted EE for convergence history, clamped to [0,1]
+        % Normalised weighted EE for convergence history
         obj_hist(t) = omega*((EEc_sdr-EEcmin)/nc) + (1-omega)*((EEs_sdr-EEsmin)/ns);
+
+        % Per-component history                   
+        EEc_hist(t) = omega*((EEc_sdr-EEcmin)/nc) ;                     
+        EEs_hist(t) = (1-omega)*((EEs_sdr-EEsmin)/ns);                     
 
         % ------------------------------------------------------------------
         % Iteration log
         % ------------------------------------------------------------------
-        fprintf(' Iter %2d: Rate = %6.2f bps/Hz | SensGain = %6.4f | P_tot = %6.4f W | q = %6.4f | EEc = %6.4f bit/J/Hz | EEs = %6.4f \n', ...
-        t, R_sum_sdr, p_sense_sdr, P_cons_sdr, q_new, EEc_sdr, EEs_sdr);
+        fprintf([' Iter %2d: Rate=%6.2f bps/Hz | SensGain=%8.6f |' ...
+                 ' P_tot=%6.4f W | q=%8.4f | EEc=%8.4f | EEs=%8.4f\n'], ...
+                t, R_sum_sdr, p_sense_sdr, P_cons_sdr, q_new, EEc_sdr, EEs_sdr);
+
         if abs(q_new - q) <= epsilon
             obj_hist = obj_hist(1:t);
+            EEc_hist = EEc_hist(1:t);   
+            EEs_hist = EEs_hist(1:t);   
             break;
         end
         q = q_new;
@@ -219,12 +237,16 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist] = ...
 
     % Trim trailing zeros if loop hit T_max without triggering break
     nz = find(obj_hist ~= 0, 1, 'last');
-    if ~isempty(nz); obj_hist = obj_hist(1:nz); end
+    if ~isempty(nz)
+        obj_hist = obj_hist(1:nz);
+        EEc_hist = EEc_hist(1:nz);   
+        EEs_hist = EEs_hist(1:nz);   
+    end
 
     [Wc_r1, Ws_r1] = gaussian_randomization( ...
         Wc_SDR, Ws_SDR, H_hat, theta_targets, ...
         N, K, M, P_max, sigma2, Gamma_min, gamma_min, ...
-        i_b, i_k, P_static, delta_outage, xi_k_vec, omega, EEcmax, EEsmax, N_rand, EEcmin, EEsmin);
+        i_b, i_k, P_static, delta_outage,xi_k_vec,  omega, EEcmax, EEsmax, N_rand, EEcmin, EEsmin);
 
     [EEc, EEs] = compute_EE(Wc_r1, Ws_r1, H_hat, theta_targets, ...
                             sigma2, i_b, i_k, P_static, N, K, M);
