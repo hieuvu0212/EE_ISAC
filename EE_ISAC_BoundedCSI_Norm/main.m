@@ -21,10 +21,10 @@ IMP_EPS = 0;
 
 %% =========================================================================
 %  GENERATE BASELINE CHANNEL  H_hat  (N x K)
-H_hat = generate_channels(p.N, p.K, 1);
-save('saved_channels.mat', 'H_hat', 'p');
-fprintf('Channel realisation saved to saved_channels.mat\n\n');
-
+%H_hat = generate_channels(p.N, p.K, 1);
+%save('saved_channels.mat', 'H_hat', 'p');
+%fprintf('Channel realisation saved to saved_channels.mat\n\n');
+load('saved_channels.mat')
 %% =========================================================================
 %  COMPUTE UNCERTAINTY RADII  r_k  FOR THE BASELINE CHANNEL
 for k = 1:p.K
@@ -93,9 +93,10 @@ for idx = 1:n_om
     ec_norm = (ec - EEcmin) / (EEcmax - EEcmin);
     es_norm = (es - EEsmin) / (EEsmax - EEsmin);
 
-    % Apply the omega weighting  ← this is the fix
+    
     wEEc_om(idx) = om       * ec_norm;
     wEEs_om(idx) = (1-om)   * es_norm;
+    % Break if either weighted component leaves [0,1]
     if wEEc_om(idx) > 1 || wEEc_om(idx) < 0 || ...
        wEEs_om(idx) > 1 || wEEs_om(idx) < 0
         fprintf('  WARNING: omega=%.2f caused out-of-range value. Stopping sweep.\n', om);
@@ -134,7 +135,7 @@ set(gcf, 'Position', [100 100 750 480]);
 yyaxis left;
 plot(omega_vec, wEEc_om, 'b-o', 'LineWidth', 2, 'MarkerSize', 5, ...
     'MarkerFaceColor', 'b', 'DisplayName', '\omega \cdot EE_c^{norm}');
-ylabel('\omega \cdot EE_c^{norm}', 'FontSize', 13, 'Color', 'b');
+ylabel('\omega \cdot EE_c^{norzm}', 'FontSize', 13, 'Color', 'b');
 set(gca, 'YColor', 'b');
  
 yyaxis right;
@@ -142,7 +143,6 @@ plot(omega_vec, wEEs_om, 'r-s', 'LineWidth', 2, 'MarkerSize', 5, ...
     'MarkerFaceColor', 'r', 'DisplayName', '(1-\omega) \cdot EE_s^{norm}');
 ylabel('(1-\omega) \cdot EE_s^{norm}', 'FontSize', 13, 'Color', 'r');
 set(gca, 'YColor', 'r');
- 
 % Mark crossover point
 if ~isempty(cross_idx)
     yyaxis left;
@@ -376,82 +376,88 @@ fprintf('    Figure 4 rendered.\n\n');
 
 %% =========================================================================
 %  FIGURE 5 – IMPACT OF HARDWARE IMPAIRMENT COEFFICIENTS (i_b, i_k)
-%  (unchanged – single benchmark, bar chart layout)
+%  4 benchmarks (Robust, Perfect CSI, Perfect HW, Perfect Both)
+%  For "Perfect HW" variants: i_b/i_k are fixed at IMP_EPS (flat line).
+%  For "Robust" / "Perfect CSI" variants: i_b/i_k are swept.
 % --------------------------------------------------------------------------
-fprintf('=== Figure 5: Hardware impairments sweep ===\n');
+fprintf('=== Figure 5: Hardware impairments sweep (4 benchmarks) ===\n');
 
-i_b_vec    = [0.01, 0.02, 0.03,0.04];
-i_k_vec    = [0.02, 0.04, 0.06,0.08];
+i_b_vec    = [0.01, 0.02, 0.03, 0.04];
+i_k_vec    = [0.02, 0.04, 0.06, 0.08];
 n_imp      = numel(i_b_vec);
 imp_labels = arrayfun(@(a,b) sprintf('(%.2f,%.2f)',a,b), ...
                       i_b_vec, i_k_vec, 'UniformOutput', false);
 
-% --- Pass 1: shared bounds ---
-ec_max_imp = zeros(n_imp,1);  ec_min_imp = zeros(n_imp,1);
-es_max_imp = zeros(n_imp,1);  es_min_imp = zeros(n_imp,1);
+% For each variant, build effective i_b / i_k used at each sweep point:
+%   v=1 Robust       : sweep i_b_vec(idx), i_k_vec(idx);  r_k = r_k_rob
+%   v=2 Perfect CSI  : sweep i_b_vec(idx), i_k_vec(idx);  r_k = 0
+%   v=3 Perfect HW   : fixed IMP_EPS, IMP_EPS;             r_k = r_k_rob
+%   v=4 Perfect Both : fixed IMP_EPS, IMP_EPS;             r_k = 0
+ib_use = @(v,idx) deal( ...
+    (v<=2)*i_b_vec(idx) + (v>2)*IMP_EPS, ...
+    (v<=2)*i_k_vec(idx) + (v>2)*IMP_EPS );
 
-for idx = 1:n_imp
-    fprintf('  [Norm] i_b=%.3f  i_k=%.3f\n', i_b_vec(idx), i_k_vec(idx));
-    [ec_max_imp(idx), ec_min_imp(idx), es_max_imp(idx), es_min_imp(idx)] = ...
-        get_norm_constants(H_hat, p.theta_targets, p.N, p.K, p.M, ...
-            p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
-            i_b_vec(idx), i_k_vec(idx), p.P_static, ...
-            p.r_k_vec, p.T_max, p.epsilon, p.N_rand);
+% --- Pass 1: shared bounds across all 4 variants x all sweep points ---
+ec_max_all = zeros(n_imp,4);  ec_min_all = zeros(n_imp,4);
+es_max_all = zeros(n_imp,4);  es_min_all = zeros(n_imp,4);
+
+for v = 1:4
+    for idx = 1:n_imp
+        [ib_cur, ik_cur] = ib_use(v, idx);
+        fprintf('  [Norm] %-16s  i_b=%.3f  i_k=%.3f\n', v_lbl{v}, ib_cur, ik_cur);
+        [ec_max_all(idx,v), ec_min_all(idx,v), ...
+         es_max_all(idx,v), es_min_all(idx,v)] = ...
+            get_norm_constants(H_hat, p.theta_targets, p.N, p.K, p.M, ...
+                p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
+                ib_cur, ik_cur, p.P_static, v_rk{v}, p.T_max, p.epsilon, p.N_rand);
+    end
 end
 
-EEc_max_f5 = max(ec_max_imp);  EEc_min_f5 = min(ec_min_imp);
-EEs_max_f5 = max(es_max_imp);  EEs_min_f5 = min(es_min_imp);
-fprintf('  Fig5 EEc bounds: [%.4f, %.4f]\n', EEc_min_f5, EEc_max_f5);
-fprintf('  Fig5 EEs bounds: [%.4f, %.4f]\n', EEs_min_f5, EEs_max_f5);
+[EEc_max_f5, best_idx_f5] = max(ec_max_all(:,1));
+EEc_min_f5 = ec_min_all(best_idx_f5, 1);
+EEs_max_f5 = es_max_all(best_idx_f5, 1);
+EEs_min_f5 = es_min_all(best_idx_f5, 1);
+fprintf('  Fig5 shared EEc bounds: [%.4f, %.4f]\n', EEc_min_f5, EEc_max_f5);
+fprintf('  Fig5 shared EEs bounds: [%.4f, %.4f]\n', EEs_min_f5, EEs_max_f5);
 
-% --- Pass 2: solve ---
-WEE_imp = zeros(n_imp,1);
-EEc_imp = zeros(n_imp,1);
-EEs_imp = zeros(n_imp,1);
+% --- Pass 2: solve all 4 variants ---
+WEE_imp = zeros(n_imp, 4);
+EEc_imp = zeros(n_imp, 4);
+EEs_imp = zeros(n_imp, 4);
 
-for idx = 1:n_imp
-    fprintf('  [Solve] i_b=%.3f  i_k=%.3f\n', i_b_vec(idx), i_k_vec(idx));
-    [~,~,ec,es,~] = solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, ...
-        p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
-        i_b_vec(idx), i_k_vec(idx), p.P_static, p.r_k_vec, p.omega, ...
-        p.T_max, p.epsilon, EEc_max_f5, EEs_max_f5, p.N_rand, EEc_min_f5, EEs_min_f5);
-    EEc_imp(idx) = ec;  EEs_imp(idx) = es;
-    WEE_imp(idx) = p.omega     * ((ec - EEc_min_f5)/(EEc_max_f5 - EEc_min_f5)) + ...
-                   (1-p.omega) * ((es - EEs_min_f5)/(EEs_max_f5 - EEs_min_f5));
-    fprintf('    EEc=%.4f  EEs=%.4f  WEE=%.4f\n', ec, es, WEE_imp(idx));
+for v = 1:4
+    for idx = 1:n_imp
+        [ib_cur, ik_cur] = ib_use(v, idx);
+        fprintf('  [Solve] %-16s  i_b=%.3f  i_k=%.3f\n', v_lbl{v}, ib_cur, ik_cur);
+        [~,~,ec,es,~] = solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, ...
+            p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
+            ib_cur, ik_cur, p.P_static, v_rk{v}, p.omega, ...
+            p.T_max, p.epsilon, EEc_max_f5, EEs_max_f5, p.N_rand, EEc_min_f5, EEs_min_f5);
+        EEc_imp(idx,v) = ec;  EEs_imp(idx,v) = es;
+        WEE_imp(idx,v) = p.omega     * ((ec - EEc_min_f5)/(EEc_max_f5 - EEc_min_f5)) + ...
+                         (1-p.omega) * ((es - EEs_min_f5)/(EEs_max_f5 - EEs_min_f5));
+        fprintf('    EEc=%.4f  EEs=%.4f  WEE=%.4f\n', ec, es, WEE_imp(idx,v));
+    end
 end
 
 x_ticks = 1:n_imp;
-figure(5); set(gcf,'Position',[100 100 1200 500]);
+figure(5); set(gcf,'Position',[100 100 700 480]);
 
-subplot(1,2,1);
-plot(x_ticks, WEE_imp, '-o', 'LineWidth', 2, 'MarkerSize', 8, ...
-     'Color', [0.2 0.5 0.8], 'MarkerFaceColor', [0.2 0.5 0.8]);
-grid on;
+for v = 1:4
+    plot(x_ticks, WEE_imp(:,v), styles{v}, 'LineWidth',2, ...
+        'MarkerSize',7, 'MarkerFaceColor',mfc{v}); hold on;
+end
+hold off; grid on;
 set(gca,'XTick',x_ticks,'XTickLabel',imp_labels,'FontSize',12);
 xlabel('(i_b,  i_k)  pairs','FontSize',13);
-ylabel('Normalised WEE','FontSize',13);
-title(sprintf('(a) WEE  (\\omega=%.3f)', p.omega),'FontSize',13);
+ylabel('Normalised Weighted EE','FontSize',13);
+title(sprintf('Fig. 5: Impact of Hardware Impairments  (\\omega=%.3f)', p.omega), ...
+      'FontSize',13,'FontWeight','bold');
+legend(v_lbl,'Location','best','FontSize',10);
 xtickangle(15);
-
-subplot(1,2,2);
-yyaxis left;
-plot(x_ticks, EEc_imp, 'b-o','LineWidth',2,'MarkerSize',8,'MarkerFaceColor','b');
-ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13,'Color','b');
-set(gca,'YColor','b','XTick',x_ticks,'XTickLabel',imp_labels,'FontSize',12);
-yyaxis right;
-plot(x_ticks, EEs_imp, 'r-s','LineWidth',2,'MarkerSize',8,'MarkerFaceColor','r');
-ylabel('Sensing EE  (EE_s)','FontSize',13,'Color','r');
-set(gca,'YColor','r'); grid on;
-xlabel('(i_b,  i_k)  pairs','FontSize',13);
-title('(b) Raw EE_c and EE_s','FontSize',13);
-legend('EE_c','EE_s','Location','best','FontSize',11);
-xtickangle(15);
-
-sgtitle(sprintf('Fig. 5: Impact of Hardware Impairments  (\\omega=%.3f)', p.omega), ...
-        'FontSize',14,'FontWeight','bold');
 drawnow;
 fprintf('    Figure 5 rendered.\n\n');
+
 
 %% =========================================================================
 %  FIGURE 6 – WEIGHTED EE vs P_max  (4 benchmarks)
@@ -459,7 +465,7 @@ fprintf('    Figure 5 rendered.\n\n');
 % --------------------------------------------------------------------------
 fprintf('=== Figure 6: P_max sweep (4 benchmarks) ===\n');
 
-Pmax_dBm_vec = 15:5:40;
+Pmax_dBm_vec = 5:5:40;
 Pmax_W_vec   = db2pow(Pmax_dBm_vec) * 1e-3;
 n_pmax       = numel(Pmax_dBm_vec);
 
@@ -637,111 +643,154 @@ set(gca,'FontSize',12);
 drawnow;
 fprintf('    Figure 7 rendered.\n\n');
 
-%% =========================================================================
-%  FIGURE 8 – IMPACT OF CHANNEL UNCERTAINTY LEVEL delta  (unchanged)
+%% =========================================================================%  FIGURE 8 – IMPACT OF CHANNEL UNCERTAINTY LEVEL delta  (4 benchmarks)
+%  Bounded CSI: r_k is swept via delta; "Perfect CSI" uses r_k=0 (flat).
+%  v=1 Robust       : r_k swept via delta;  i_b=p.i_b,   i_k=p.i_k
+%  v=2 Perfect CSI  : r_k = 0 (flat);       i_b=p.i_b,   i_k=p.i_k
+%  v=3 Perfect HW   : r_k swept via delta;  i_b=IMP_EPS, i_k=IMP_EPS
+%  v=4 Perfect Both : r_k = 0 (flat);       i_b=IMP_EPS, i_k=IMP_EPS
 % --------------------------------------------------------------------------
-fprintf('=== Figure 8: Channel uncertainty level delta ===\n');
+fprintf('=== Figure 8: Channel uncertainty level delta (4 benchmarks) ===\n');
 
 delta_vec = [0, 0.005, 0.01, 0.02, 0.03];
 n_delta   = numel(delta_vec);
 
-% --- Pass 1: shared bounds ---
-ec_max_all = zeros(n_delta,1);  ec_min_all = zeros(n_delta,1);
-es_max_all = zeros(n_delta,1);  es_min_all = zeros(n_delta,1);
+% Helper: compute r_k_vec for a given delta
+rk_from_delta = @(d) arrayfun(@(k) ...
+    sqrt((d*norm(H_hat(:,k)))^2 / 2 * chi2inv(1-p.delta_outage, 2*p.N)), ...
+    1:p.K);
 
-for idx = 1:n_delta
-    delta_cur = delta_vec(idx);
-    r_k_cur   = zeros(1, p.K);
-    for k = 1:p.K
-        xi_k       = delta_cur * norm(H_hat(:,k));
-        r_k_cur(k) = sqrt((xi_k^2/2) * chi2inv(1-p.delta_outage, 2*p.N));
+% For variants 2 & 4, r_k = 0 regardless of delta
+rk_for_v = @(v, d) (ismember(v,[1 3])) * rk_from_delta(d);
+
+% --- Pass 1: shared bounds ---
+ec_max_all = zeros(n_delta,4);  ec_min_all = zeros(n_delta,4);
+es_max_all = zeros(n_delta,4);  es_min_all = zeros(n_delta,4);
+
+for v = 1:4
+    for idx = 1:n_delta
+        r_k_cur = rk_for_v(v, delta_vec(idx));
+        fprintf('  [Norm] %-16s  delta=%.4f\n', v_lbl{v}, delta_vec(idx));
+        [ec_max_all(idx,v), ec_min_all(idx,v), ...
+         es_max_all(idx,v), es_min_all(idx,v)] = ...
+            get_norm_constants(H_hat, p.theta_targets, p.N, p.K, p.M, ...
+                p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
+                v_ib{v}, v_ik{v}, p.P_static, r_k_cur, p.T_max, p.epsilon, p.N_rand);
     end
-    fprintf('  [Norm] delta=%.4f\n', delta_cur);
-    [ec_max_all(idx), ec_min_all(idx), es_max_all(idx), es_min_all(idx)] = ...
-        get_norm_constants(H_hat, p.theta_targets, p.N, p.K, p.M, ...
-            p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
-            p.i_b, p.i_k, p.P_static, r_k_cur, p.T_max, p.epsilon, p.N_rand);
 end
 
-EEc_max_f8 = max(ec_max_all);  EEc_min_f8 = min(ec_min_all);
-EEs_max_f8 = max(es_max_all);  EEs_min_f8 = min(es_min_all);
+[EEc_max_f8, best_idx_f8] = max(ec_max_all(:,1));
+EEc_min_f8 = ec_min_all(best_idx_f8, 1);
+EEs_max_f8 = es_max_all(best_idx_f8, 1);
+EEs_min_f8 = es_min_all(best_idx_f8, 1);
 fprintf('  Fig8 shared EEc bounds: [%.4f, %.4f]\n', EEc_min_f8, EEc_max_f8);
 fprintf('  Fig8 shared EEs bounds: [%.4f, %.4f]\n', EEs_min_f8, EEs_max_f8);
 
 % --- Pass 2: solve ---
-WEE_delta = zeros(n_delta,1);
-EEc_delta = zeros(n_delta,1);
-EEs_delta = zeros(n_delta,1);
+WEE_delta = zeros(n_delta, 4);
+EEc_delta = zeros(n_delta, 4);
+EEs_delta = zeros(n_delta, 4);
 
-for idx = 1:n_delta
-    delta_cur = delta_vec(idx);
-    r_k_cur   = zeros(1, p.K);
-    for k = 1:p.K
-        xi_k       = delta_cur * norm(H_hat(:,k));
-        r_k_cur(k) = sqrt((xi_k^2/2) * chi2inv(1-p.delta_outage, 2*p.N));
+for v = 1:4
+    for idx = 1:n_delta
+        r_k_cur = rk_for_v(v, delta_vec(idx));
+        fprintf('  [Solve] %-16s  delta=%.4f\n', v_lbl{v}, delta_vec(idx));
+        [~,~,ec,es,~] = solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, p.P_max, p.sigma2, ...
+            p.Gamma_min, p.gamma_min, v_ib{v}, v_ik{v}, p.P_static, r_k_cur, p.omega, ...
+            p.T_max, p.epsilon, EEc_max_f8, EEs_max_f8, p.N_rand, EEc_min_f8, EEs_min_f8);
+        EEc_delta(idx,v) = ec;
+        EEs_delta(idx,v) = es;
+        WEE_delta(idx,v) = p.omega     * ((ec - EEc_min_f8)/(EEc_max_f8 - EEc_min_f8)) + ...
+                           (1-p.omega) * ((es - EEs_min_f8)/(EEs_max_f8 - EEs_min_f8));
+        fprintf('    EEc=%.4f  EEs=%.4f  WEE=%.4f\n', ec, es, WEE_delta(idx,v));
     end
-    fprintf('  [Solve] delta=%.4f\n', delta_cur);
-    [~,~,ec,es,~] = solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, p.P_max, p.sigma2, ...
-        p.Gamma_min, p.gamma_min, p.i_b, p.i_k, p.P_static, r_k_cur, p.omega, ...
-        p.T_max, p.epsilon, EEc_max_f8, EEs_max_f8, p.N_rand, EEc_min_f8, EEs_min_f8);
-    EEc_delta(idx) = ec;
-    EEs_delta(idx) = es;
-    WEE_delta(idx) = p.omega     * ((ec - EEc_min_f8)/(EEc_max_f8 - EEc_min_f8)) + ...
-                     (1-p.omega) * ((es - EEs_min_f8)/(EEs_max_f8 - EEs_min_f8));
-    fprintf('    EEc=%.4f  EEs=%.4f  WEE=%.4f\n', ec, es, WEE_delta(idx));
 end
 
-perf_idx = 1;
-rob_idx  = 2:n_delta;
+figure(8); set(gcf,'Position',[100 100 700 480]);
 
-WEE_perf_val = WEE_delta(perf_idx);
-EEc_perf_val = EEc_delta(perf_idx);
-EEs_perf_val = EEs_delta(perf_idx);
-
-figure(8); set(gcf,'Position',[100 100 1200 500]);
-
-subplot(1,2,1);
-plot(delta_vec(rob_idx), WEE_delta(rob_idx), ...
-     'b-o','LineWidth',2,'MarkerSize',8,'MarkerFaceColor','b');
-hold on;
-yline(WEE_perf_val, 'k--', 'LineWidth',1.5);
+for v = 1:4
+    plot(delta_vec, WEE_delta(:,v), styles{v}, 'LineWidth',2, ...
+        'MarkerSize',7, 'MarkerFaceColor',mfc{v}); hold on;
+end
 hold off; grid on;
 xlabel('Channel Uncertainty Level  \delta','FontSize',13);
 ylabel('Normalised Weighted EE','FontSize',13);
-title(sprintf('(a) WEE  (\\omega=%.3f)', p.omega),'FontSize',13);
-legend('Robust (Bounded)','Perfect Channel (\delta=0)', ...
-       'Location','south','FontSize',11);
+title(sprintf('Fig. 8: Impact of \\delta  (\\omega=%.3f)', p.omega), ...
+      'FontSize',13,'FontWeight','bold');
+legend(v_lbl,'Location','best','FontSize',10);
 set(gca,'FontSize',12);
-
-subplot(1,2,2);
-yyaxis left;
-plot(delta_vec(rob_idx), EEc_delta(rob_idx), ...
-     'b-o','LineWidth',2,'MarkerSize',7,'MarkerFaceColor','b');
-hold on;
-yline(EEc_perf_val, 'b--', 'LineWidth',1.5);
-hold off;
-ylabel('Communication EE  (EE_c)  [bps/Hz/W]','FontSize',13,'Color','b');
-set(gca,'YColor','b');
-yyaxis right;
-plot(delta_vec(rob_idx), EEs_delta(rob_idx), ...
-     'r-s','LineWidth',2,'MarkerSize',7,'MarkerFaceColor','r');
-hold on;
-yline(EEs_perf_val, 'r--', 'LineWidth',1.5);
-hold off;
-ylabel('Sensing EE  (EE_s)','FontSize',13,'Color','r');
-set(gca,'YColor','r'); grid on;
-xlabel('Channel Uncertainty Level  \delta','FontSize',13);
-title('(b) Raw EE_c and EE_s','FontSize',13);
-legend('EE_c Robust','EE_c Perfect (\delta=0)', ...
-       'EE_s Robust','EE_s Perfect (\delta=0)', ...
-       'Location','best','FontSize',11);
-set(gca,'FontSize',12);
-
-sgtitle(sprintf('Fig. 8: Impact of Channel Uncertainty Level \\delta  (\\omega=%.3f)', p.omega), ...
-        'FontSize',14,'FontWeight','bold');
 drawnow;
 fprintf('    Figure 8 rendered.\n\n');
-fprintf('=== All figures complete. ===\n');
+%% =========================================================================
+%  FIGURE 9 – TRANSMIT BEAMPATTERN GAIN
+% --------------------------------------------------------------------------
+fprintf('=== Figure 9: Beampattern ===\n');
+
+theta_scan = -90 : 0.5 : 90;
+n_theta    = numel(theta_scan);
+sl_bp      = @(th) exp(1j*pi*((0:p.N-1)'-(p.N-1)/2)*sind(th));
+
+% --- Solve once per variant at baseline parameters ----------------------
+Wc_bp = cell(1,4);
+Ws_bp = cell(1,4);
+
+for v = 1:4
+    fprintf('  [Beampattern] variant: %s\n', v_lbl{v});
+    [Wc_bp{v}, Ws_bp{v}, ~, ~, ~] = ...
+        solve_ISAC(H_hat, p.theta_targets, p.N, p.K, p.M, ...
+                   p.P_max, p.sigma2, p.Gamma_min, p.gamma_min, ...
+                   v_ib{v}, v_ik{v}, p.P_static, v_rk{v}, ...   
+                   p.omega, p.T_max, p.epsilon, ...
+                   EEcmax, EEsmax, p.N_rand, EEcmin, EEsmin);
+  
+end
+
+% --- Compute beampattern gain -------------------------------------------
+BP_dB = zeros(n_theta, 4);
+
+for v = 1:4
+    W_tot = zeros(p.N, p.N);
+    for j = 1:p.K; W_tot = W_tot + Wc_bp{v}{j}; end
+    for l = 1:p.M; W_tot = W_tot + Ws_bp{v}{l};  end
+    tr_W  = real(trace(W_tot));
+
+    BP_lin = zeros(n_theta, 1);
+    for idx = 1:n_theta
+        vm = sl_bp(theta_scan(idx));
+        BP_lin(idx) = real(vm' * W_tot * vm) + v_ib{v} * tr_W;
+    end
+
+    BP_lin     = max(BP_lin, 1e-30);
+    BP_dB(:,v) = 10*log10(BP_lin / max(BP_lin));
+end
+
+% --- Plot ---------------------------------------------------------------
+figure(9); set(gcf,'Position',[100 100 750 500]);
+
+for v = 1:4
+    plot(theta_scan, BP_dB(:,v), styles{v}, ...
+         'LineWidth', 2, 'MarkerSize', 4, ...
+         'MarkerIndices', 1:20:n_theta, ...
+         'MarkerFaceColor', mfc{v});
+    hold on;
+end
+
+% Target angle markers
+for m = 1:p.M
+    xline(p.theta_targets(m), 'k:', 'LineWidth', 1.2, 'HandleVisibility','off');
+end
+hold off; grid on;
+
+xlim([-90 90]);
+ylim([max(min(BP_dB(:)), -40)  3]);
+set(gca, 'XTick', -90:15:90, 'FontSize', 12);
+xlabel('Angle  \theta  (degrees)',        'FontSize', 13);
+ylabel('Normalised Beampattern Gain (dB)','FontSize', 13);
+title(sprintf('Fig. 9: Transmit Beampattern  (\\omega=%.3f)', p.omega), ...
+      'FontSize', 13, 'FontWeight', 'bold');
+legend(v_lbl, 'Location','best', 'FontSize', 10);
+drawnow;
+fprintf('    Figure 9 rendered.\n\n');
 %% =========================================================================
     %  SAVE SIMULATION DATA
     % --------------------------------------------------------------------------
@@ -762,9 +811,11 @@ fprintf('=== All figures complete. ===\n');
     fprintf('Saving data to: %s\n', matFilePath);
 
     % 3. Targeted save (avoids crashing from parallel pool objects)
+% 3. Targeted save (avoids crashing from parallel pool objects)
     save(matFilePath, 'p', 'H_hat', 'Gamma_dBm_vec', 'gamma_dB_vec', ...
-    'i_b_vec', 'i_k_vec', 'n_imp', 'imp_labels', 'Pmax_dBm_vec', 'N_vec_f7', ...
-    'delta_vec', 'rob_idx', 'perf_idx', 'WEE_perf_val', 'EEc_perf_val', 'EEs_perf_val', ...
-    '-regexp', '^WEE_f', '^EEc_f', '^EEs_f', '^WEE_delta', '^EEc_delta', '^EEs_delta');
+        'i_b_vec', 'i_k_vec', 'n_imp', 'imp_labels', 'Pmax_dBm_vec', 'N_vec_f7', ...
+        'delta_vec', 'omega_vec', 'wEEc_om', 'wEEs_om', 'omega_cross', 'wEEc_cross', ... 
+        'obj_hist', 'EEc_hist', 'EEs_hist', 'Wc_f1', 'Ws_f1', ...
+        '-regexp', '^WEE_f', '^EEc_f', '^EEs_f', '^WEE_delta', '^EEc_delta', '^EEs_delta');
 
     fprintf('Data successfully saved.\n');
