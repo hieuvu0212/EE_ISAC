@@ -22,8 +22,8 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
     log_2 = log(2);
 
     % Min-max normalization ranges (guard against zero range)
-    nc = max(EEcmax - EEcmin, 1e-9);
-    ns = max(EEsmax - EEsmin, 1e-9);
+    nc = EEcmax - EEcmin;
+    ns = EEsmax - EEsmin;
 
     % --- Initialise beamformers ------------------------------------------
     p0 = P_max / (K + M);
@@ -142,10 +142,15 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
                     for l = 1:M;          Qk=Qk-Ws_v(:,:,l);       end
                     Qk = Qk - i_k*W_sum ...
                              - (1+i_k)*i_b*diag(diag(W_sum));
-                    sc_val = real(hk'*Qk*hk) ...
-                             - (1+i_k)*sigma2 - lambda_v(k)*r_k^2;
-                    [Qk+lambda_v(k)*eye(N),  Qk*hk ; ...
-                     (Qk*hk)',               sc_val ] == hermitian_semidefinite(N+1);
+                     if r_k > 0
+                     % Full S-procedure LMI with lambda
+                     sc_val = real(hk'*Qk*hk) - (1+i_k)*sigma2 - lambda_v(k)*r_k^2;
+                    [Qk+lambda_v(k)*eye(N), Qk*hk;
+                    (Qk*hk)',              sc_val] == hermitian_semidefinite(N+1);
+                    else
+                    % Perfect CSI: nominal SINR constraint only
+                    real(hk'*Qk*hk) - (1+i_k)*sigma2 >= 0;
+                    end
                 end
         cvx_end
 
@@ -192,8 +197,8 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
         obj_hist(t) = omega*((EEc_sdr-EEcmin)/nc) + (1-omega)*((EEs_sdr-EEsmin)/ns);
 
         % Per-component history (raw bits/J/Hz and sensing EE)  <-- NEW
-        EEc_hist(t) = EEc_sdr;
-        EEs_hist(t) = EEs_sdr;
+        EEc_hist(t) = omega*((EEc_sdr-EEcmin)/nc);
+        EEs_hist(t) = (1-omega)*((EEs_sdr-EEsmin)/ns);
 
         % ------------------------------------------------------------------
         % Iteration log
@@ -205,9 +210,10 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
         if abs(q_new - q) <= epsilon
             obj_hist = obj_hist(1:t);
             EEc_hist = EEc_hist(1:t);   
-            EEs_hist = EEs_hist(1:t);   
-            break;
+           EEs_hist = EEs_hist(1:t);   
+           break;
         end
+        
         q = q_new;
     end
 
