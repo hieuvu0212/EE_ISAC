@@ -25,24 +25,61 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
     nc = EEcmax - EEcmin;
     ns = EEsmax - EEsmin;
 
-    % --- Initialise beamformers ------------------------------------------
-    p0 = P_max / (K + M);
-    Wc = cell(1,K);  Ws = cell(1,M);
-    for j = 1:K
-        w = (randn(N,1)+1j*randn(N,1))/sqrt(2);
-        w = w/norm(w)*sqrt(p0);
-        Wc{j} = w*w';
-    end
-    for l = 1:M
-        w = sl(theta_targets(l))*sqrt(p0);
-        Ws{l} = w*w';
-    end
+% --- Initialise beamformers via worst-case-margin feasibility SDP ------
+cvx_begin quiet
+    cvx_solver mosek
+    variable Wc0(N,N,K) complex semidefinite
+    variable Ws0(N,N,M) complex semidefinite
+    variable lambda0(K) nonnegative
+    variable tslack
 
-    q        = 0;
-    obj_hist = zeros(T_max, 1);
-    EEc_hist = zeros(T_max, 1);   
-    EEs_hist = zeros(T_max, 1);   
-    Wc_SDR   = Wc;  Ws_SDR = Ws;
+    W_sum0   = sum(Wc0,3) + sum(Ws0,3);
+    tot_pow0 = real(trace(W_sum0));
+
+    maximize( tslack )
+    subject to
+        tot_pow0 <= P_max;
+
+        % sensing, slack scaled by Gamma_min  ->  >= (1+t) Gamma_min
+        for m = 1:M
+            vm = sl(theta_targets(m));
+            real(trace((vm*vm')*W_sum0)) + i_b*tot_pow0 >= (1+tslack)*Gamma_min;
+        end
+
+        % robust SINR (S-procedure LMI), slack scaled by the noise term
+        for k = 1:K
+            hk  = H_hat(:,k);
+            r_k = r_k_vec(k);
+            Qk = (1/gamma_min)*Wc0(:,:,k);
+            for j = 1:K; if j~=k; Qk = Qk - Wc0(:,:,j); end; end
+            for l = 1:M;          Qk = Qk - Ws0(:,:,l);       end
+            Qk = Qk - i_k*W_sum0 - (1+i_k)*i_b*diag(diag(W_sum0));
+            if r_k > 0
+                sc_val = real(hk'*Qk*hk) - (1+tslack)*(1+i_k)*sigma2 - lambda0(k)*r_k^2;
+                [Qk+lambda0(k)*eye(N), Qk*hk;
+                 (Qk*hk)',             sc_val] == hermitian_semidefinite(N+1);
+            else
+                real(hk'*Qk*hk) - (1+tslack)*(1+i_k)*sigma2 >= 0;
+            end
+        end
+cvx_end
+
+if strcmp(cvx_status,'Infeasible') || strcmp(cvx_status,'Failed') || tslack < 0
+    error('solve_ISAC:infeasible', ...
+          'Feasibility SDP gave t = %.3g (status: %s); infeasible at these thresholds.', ...
+          tslack, cvx_status);
+end
+
+Wc = cell(1,K);  Ws = cell(1,M);
+for j = 1:K; Wc{j} = (Wc0(:,:,j)+Wc0(:,:,j)')/2; end
+for l = 1:M; Ws{l} = (Ws0(:,:,l)+Ws0(:,:,l)')/2; end
+
+
+q        = 0;
+obj_hist = zeros(T_max, 1);
+EEc_hist = zeros(T_max, 1);
+EEs_hist = zeros(T_max, 1);
+Wc_SDR   = Wc;  Ws_SDR = Ws;
 
     % --- Dinkelbach-SCA main loop ----------------------------------------
     for t = 1:T_max
@@ -71,6 +108,8 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
             variable Wc_v(N,N,K) complex semidefinite
             variable Ws_v(N,N,M) complex semidefinite
             variable lambda_v(K) nonnegative
+            
+            
 
             W_sum     = sum(Wc_v,3) + sum(Ws_v,3);
             tot_power = real(trace(W_sum));
@@ -142,7 +181,13 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
                     for l = 1:M;          Qk=Qk-Ws_v(:,:,l);       end
                     Qk = Qk - i_k*W_sum ...
                              - (1+i_k)*i_b*diag(diag(W_sum));
-                     if r_k > 0
+                    %{
+                    sc_val = real(hk'*Qk*hk) ...
+                             - (1+i_k)*sigma2 - lambda_v(k)*r_k^2;
+                    [Qk+lambda_v(k)*eye(N),  Qk*hk ; ...
+                    (Qk*hk)',               sc_val ] == hermitian_semidefinite(N+1);
+                    %}
+                    if r_k > 0
                      % Full S-procedure LMI with lambda
                      sc_val = real(hk'*Qk*hk) - (1+i_k)*sigma2 - lambda_v(k)*r_k^2;
                     [Qk+lambda_v(k)*eye(N), Qk*hk;
@@ -210,10 +255,9 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
         if abs(q_new - q) <= epsilon
             obj_hist = obj_hist(1:t);
             EEc_hist = EEc_hist(1:t);   
-           EEs_hist = EEs_hist(1:t);   
-           break;
+            EEs_hist = EEs_hist(1:t);   
+            break;
         end
-        
         q = q_new;
     end
 
