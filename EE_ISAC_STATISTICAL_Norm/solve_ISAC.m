@@ -36,24 +36,65 @@ function [Wc_r1, Ws_r1, EEc, EEs, obj_hist, EEc_hist, EEs_hist] = ...
     ns = EEsmax - EEsmin;
 
     % --- Initialise beamformers -------------------------------------------
-    p0 = P_max / (K + M);
-    Wc = cell(1,K);  Ws = cell(1,M);
-    for j = 1:K
-        w = (randn(N,1)+1j*randn(N,1))/sqrt(2);
-        w = w/norm(w)*sqrt(p0);
-        Wc{j} = w*w';
-    end
-    for l = 1:M
-        w = sl(theta_targets(l))*sqrt(p0);
-        Ws{l} = w*w';
-    end
+   cvx_begin quiet
+    cvx_solver mosek
+    variable Wc0(N,N,K) complex semidefinite
+    variable Ws0(N,N,M) complex semidefinite
+    variable u0(K) nonnegative
+    variable v0(K) nonnegative
+    variable tslack
+
+    W_sum0   = sum(Wc0,3) + sum(Ws0,3);
+    tot_pow0 = real(trace(W_sum0));
+
+    maximize( tslack )
+    subject to
+        tot_pow0 <= P_max;
+
+        % sensing, slack scaled by Gamma_min  ->  >= (1+t) Gamma_min
+        for m = 1:M
+            vm = sl(theta_targets(m));
+            real(trace((vm*vm')*W_sum0)) + i_b*tot_pow0 >= (1+tslack)*Gamma_min;
+        end
+
+        % robust SINR (Bernstein), slack scaled by the noise term
+        for k = 1:K
+            hk   = H_hat(:,k);
+            xi_k = xi_k_vec(k);
+            Qk = (1/gamma_min)*Wc0(:,:,k);
+            for j = 1:K; if j~=k; Qk = Qk - Wc0(:,:,j); end; end
+            for l = 1:M;          Qk = Qk - Ws0(:,:,l);       end
+            Qk = Qk - i_k*W_sum0 - (1+i_k)*i_b*diag(diag(W_sum0));
+            c_k = real(hk'*Qk*hk) - (1+i_k)*sigma2;
+            if xi_k > 0
+                xi_k^2*real(trace(Qk)) ...
+                    - sqrt(2*log(1/delta_outage))*u0(k) ...
+                    + log(delta_outage)*v0(k) ...
+                    + c_k >= tslack*(1+i_k)*sigma2;
+                norm([xi_k^2*Qk(:); sqrt(2)*xi_k*Qk*hk]) <= u0(k);
+                v0(k)*eye(N) + xi_k^2*Qk == hermitian_semidefinite(N);
+            else
+                c_k >= tslack*(1+i_k)*sigma2;
+            end
+        end
+    cvx_end
+
+if strcmp(cvx_status,'Infeasible') || strcmp(cvx_status,'Failed') || tslack < 0
+    error('solve_ISAC:infeasible', ...
+          'Feasibility SDP gave t = %.3g (status: %s); infeasible at these thresholds.', ...
+          tslack, cvx_status);
+end
+
+Wc = cell(1,K);  Ws = cell(1,M);
+for j = 1:K; Wc{j} = (Wc0(:,:,j)+Wc0(:,:,j)')/2; end
+for l = 1:M; Ws{l} = (Ws0(:,:,l)+Ws0(:,:,l)')/2; end
 
     q        = 0;
     obj_hist = zeros(T_max, 1);
     EEc_hist = zeros(T_max, 1);   % <-- ADDED
     EEs_hist = zeros(T_max, 1);   % <-- ADDED
     Wc_SDR   = Wc;  Ws_SDR = Ws;
-
+    
     % --- Dinkelbach-SCA main loop ----------------------------------------
     for t = 1:T_max
 
